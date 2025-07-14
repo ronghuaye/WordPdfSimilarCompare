@@ -70,5 +70,5 @@
 
 本项目采用 MIT 许可证。详情请见 [LICENSE](LICENSE) 文件。
 
-## 📄 联系邮箱（Email）
+## 📧 联系邮箱（Email）
 33610547@qq.com
