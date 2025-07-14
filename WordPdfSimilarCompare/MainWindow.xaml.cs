@@ -4,12 +4,10 @@ using DocumentFormat.OpenXml.Packaging;
 using UglyToad.PdfPig;
 using ClosedXML.Excel;
 using Microsoft.WindowsAPICodePack.Dialogs;
+using System.Collections.Concurrent;
 
 namespace WordPdfSimilarCompare
 {
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
     public partial class MainWindow : Window
     {
         public MainWindow()
@@ -24,7 +22,6 @@ namespace WordPdfSimilarCompare
 
             string folder = dlg.FileName!;
             StatusText.Text = $"正在分析目录: {folder} ...";
-
             ProgressText.Text = "";
             ProgressBar.Value = 0;
 
@@ -35,52 +32,68 @@ namespace WordPdfSimilarCompare
                                 f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
-                var texts = new Dictionary<string, string>();
-
-                int fileIndex = 0;
-                foreach (var file in files)
+                if (files.Count < 2)
                 {
-                    fileIndex++;
-                    ProgressText.Text = $"正在读取文件 {fileIndex}/{files.Count}: {Path.GetFileName(file)}";
-                    await Task.Delay(50); // 模拟延迟，防止 UI 卡顿
-
-                    if (file.EndsWith(".docx"))
-                        texts[file] = ExtractTextFromDocx(file);
-                    else if (file.EndsWith(".pdf"))
-                        texts[file] = ExtractTextFromPdf(file);
+                    StatusText.Text = "目录中没有足够的 .docx 或 .pdf 文件进行比较";
+                    return;
                 }
+
+                var texts = new ConcurrentDictionary<string, string>();
+
+                // 并行提取文本内容
+                await Task.Run(() =>
+                {
+                    Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
+                    {
+                        string text = file.EndsWith(".docx")
+                            ? ExtractTextFromDocx(file)
+                            : ExtractTextFromPdf(file);
+                        texts[file] = text;
+
+                        Dispatcher.Invoke(() =>
+                        {
+                            ProgressText.Text = $"读取：{Path.GetFileName(file)}";
+                        });
+                    });
+                });
 
                 var fileNames = texts.Keys.ToList();
                 int totalComparisons = fileNames.Count * (fileNames.Count - 1) / 2;
                 int comparisonCount = 0;
 
-                var results = new List<(string FileA, string FileB, double Similarity)>();
+                var results = new ConcurrentBag<(string FileA, string FileB, double Similarity)>();
 
-                for (int i = 0; i < fileNames.Count; i++)
+                // 并行比较相似度并更新进度条
+                await Task.Run(() =>
                 {
-                    for (int j = i + 1; j < fileNames.Count; j++)
+                    Parallel.For(0, fileNames.Count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
                     {
-                        var a = fileNames[i];
-                        var b = fileNames[j];
-                        double sim = CalculateLevenshteinSimilarity(texts[a], texts[b]);
+                        for (int j = i + 1; j < fileNames.Count; j++)
+                        {
+                            var a = fileNames[i];
+                            var b = fileNames[j];
+                            double sim = CalculateLevenshteinSimilarity(texts[a], texts[b]);
 
-                        results.Add((Path.GetFileName(a), Path.GetFileName(b), sim));
+                            results.Add((Path.GetFileName(a), Path.GetFileName(b), sim));
 
-                        comparisonCount++;
-                        double progress = (double)comparisonCount / totalComparisons * 100;
-                        ProgressBar.Value = progress;
-                        ProgressText.Text = $"正在比较：{Path.GetFileName(a)} vs {Path.GetFileName(b)}";
-                        await Task.Delay(30); // 模拟小延迟以更新 UI
-                    }
-                }
+                            int count = Interlocked.Increment(ref comparisonCount);
+                            double progress = (double)count / totalComparisons * 100;
+
+                            Dispatcher.Invoke(() =>
+                            {
+                                ProgressBar.Value = progress;
+                                ProgressText.Text = $"比较：{Path.GetFileName(a)} vs {Path.GetFileName(b)}";
+                            });
+                        }
+                    });
+                });
 
                 string outputPath = Path.Combine(folder, "SimilarFile.xlsx");
-                ExportToExcel(results, outputPath);
+                ExportToExcel(results.ToList(), outputPath);
 
                 StatusText.Text = $"分析完成，结果已保存到：{outputPath}";
                 ProgressText.Text = "完成";
                 ProgressBar.Value = 100;
-
             }
             catch (Exception ex)
             {
@@ -91,7 +104,10 @@ namespace WordPdfSimilarCompare
         string ExtractTextFromDocx(string path)
         {
             using var doc = WordprocessingDocument.Open(path, false);
-            return doc.MainDocumentPart?.Document.Body?.InnerText ?? "";
+            return string.Join("\n",
+                doc.MainDocumentPart?.Document.Body?
+                    .Descendants<DocumentFormat.OpenXml.Wordprocessing.Text>()
+                    .Select(t => t.Text) ?? []);
         }
 
         string ExtractTextFromPdf(string path)
@@ -116,11 +132,16 @@ namespace WordPdfSimilarCompare
             for (int j = 0; j <= m; j++) d[0, j] = j;
 
             for (int i = 1; i <= n; i++)
+            {
                 for (int j = 1; j <= m; j++)
                 {
                     int cost = s[i - 1] == t[j - 1] ? 0 : 1;
-                    d[i, j] = Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + cost);
+                    d[i, j] = Math.Min(
+                        Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                        d[i - 1, j - 1] + cost
+                    );
                 }
+            }
 
             return d[n, m];
         }
@@ -135,13 +156,16 @@ namespace WordPdfSimilarCompare
             ws.Cell(1, 3).Value = "相似度 (0~1)";
 
             int row = 2;
-            foreach (var r in results)
+            foreach (var r in results.OrderByDescending(r => r.Similarity))
             {
                 ws.Cell(row, 1).Value = r.FileA;
                 ws.Cell(row, 2).Value = r.FileB;
                 ws.Cell(row, 3).Value = r.Similarity;
                 row++;
             }
+
+            ws.Columns().AdjustToContents();
+            ws.Range("A1:C1").Style.Font.Bold = true;
 
             workbook.SaveAs(path);
         }
