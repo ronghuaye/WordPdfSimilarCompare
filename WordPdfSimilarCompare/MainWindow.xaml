@@ -1,0 +1,21 @@
+﻿<Window x:Class="WordPdfSimilarCompare.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="文件相似度分析器" Height="240" Width="400">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Button Content="选择目录并分析" Width="200" Height="40" Click="SelectFolder_Click" />
+
+        <ProgressBar x:Name="ProgressBar" Grid.Row="1" Height="20" Margin="0,10,0,0" Minimum="0" Maximum="100" />
+
+        <TextBlock x:Name="ProgressText" Grid.Row="2" Margin="0,5,0,0" Text="准备中..." />
+
+        <TextBlock x:Name="StatusText" Grid.Row="3" Margin="0,10,0,0" TextWrapping="Wrap" />
+    </Grid>
+</Window>
